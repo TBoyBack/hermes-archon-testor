@@ -1,0 +1,212 @@
+# Archon 工作流示例
+# 用于测试用例生成的基础工作流
+
+name: test-case-generation
+version: "1.0.0"
+description: "AI 辅助测试用例生成工作流"
+
+# 触发条件
+trigger:
+  type: manual  # manual | webhook | schedule | git
+  # schedule: "0 9 * * *"  # Cron 表达式
+  # webhook: /api/v1/trigger/test-case-gen
+
+# 全局配置
+config:
+  hermes:
+    enabled: true
+    model: gpt-4
+    temperature: 0.7
+  timeout: 300
+  retry: 3
+  parallel: false
+
+# 输入参数定义
+inputs:
+  - name: requirement_doc
+    type: file
+    required: true
+    description: "需求文档路径"
+    default: "./requirements.md"
+    
+  - name: module_name
+    type: string
+    required: true
+    description: "模块名称"
+    example: "用户登录模块"
+    
+  - name: test_type
+    type: select
+    required: false
+    options: ["功能测试", "接口测试", "UI测试", "集成测试"]
+    default: "功能测试"
+    
+  - name: priority
+    type: select
+    required: false
+    options: ["P0-核心流程", "P1-重要功能", "P2-一般功能", "P3-边缘场景"]
+    default: "P1-重要功能"
+
+# 工作流步骤
+steps:
+  # 步骤 1: 解析需求文档
+  - name: parse-requirement
+    type: hermes.parse
+    description: "解析需求文档，提取关键信息"
+    inputs:
+      document: "{{ inputs.requirement_doc }}"
+      extract_fields:
+        - 功能点
+        - 业务规则
+        - 输入输出
+        - 异常场景
+    outputs:
+      - parsed_data
+    on_error: log_and_stop
+
+  # 步骤 2: 生成测试策略
+  - name: generate-test-strategy
+    type: hermes.analyze
+    description: "基于需求生成测试策略"
+    inputs:
+      parsed_requirement: "{{ steps.parse-requirement.parsed_data }}"
+      module: "{{ inputs.module_name }}"
+      test_type: "{{ inputs.test_type }}"
+    outputs:
+      - test_strategy
+      - coverage_plan
+    depends_on:
+      - parse-requirement
+
+  # 步骤 3: 生成测试用例
+  - name: generate-test-cases
+    type: hermes.generate
+    description: "生成具体测试用例"
+    inputs:
+      strategy: "{{ steps.generate-test-strategy.test_strategy }}"
+      priority: "{{ inputs.priority }}"
+      template: "./templates/test_case.jinja2"
+    outputs:
+      - test_cases
+    depends_on:
+      - generate-test-strategy
+
+  # 步骤 4: 人工评审节点
+  - name: human-review
+    type: approval
+    description: "等待人工评审测试用例"
+    inputs:
+      test_cases: "{{ steps.generate-test-cases.test_cases }}"
+      review_form: "./templates/review_form.md"
+    outputs:
+      - approved_cases
+      - review_comments
+    depends_on:
+      - generate-test-cases
+    config:
+      approvers:
+        - role: "测试负责人"
+        - role: "产品经理"
+      timeout: 86400  # 24小时超时
+      auto_approve: false
+
+  # 步骤 5: 输出测试用例
+  - name: output-test-cases
+    type: output
+    description: "导出测试用例到指定格式"
+    inputs:
+      test_cases: "{{ steps.human-review.approved_cases }}"
+      format: "xlsx"  # xlsx | json | yaml | markdown
+      output_path: "./output/test-cases/{{ inputs.module_name }}_{{ timestamp }}.xlsx"
+    depends_on:
+      - human-review
+    outputs:
+      - output_file
+      - summary
+
+  # 步骤 6: 生成测试报告
+  - name: generate-report
+    type: hermes.report
+    description: "生成测试用例统计报告"
+    inputs:
+      total_cases: "{{ steps.output-test-cases.summary.total }}"
+      cases_by_priority: "{{ steps.output-test-cases.summary.by_priority }}"
+      module: "{{ inputs.module_name }}"
+    outputs:
+      - report_file
+    depends_on:
+      - output-test-cases
+
+# 错误处理
+error_handling:
+  default: log_and_continue
+  steps:
+    parse-requirement:
+      action: log_and_stop
+      message: "需求文档解析失败，请检查文档格式"
+    generate-test-cases:
+      action: retry
+      max_retries: 2
+    human-review:
+      action: skip  # 可配置为自动通过或跳过
+
+# 通知配置
+notifications:
+  on_start:
+    - type: log
+      message: "测试用例生成工作流开始执行"
+      
+  on_step_complete:
+    - type: log
+      message: "步骤 {{ step_name }} 完成"
+      
+  on_complete:
+    - type: log
+      message: "工作流执行完成，共生成 {{ steps.output-test-cases.summary.total }} 个测试用例"
+    - type: webhook
+      url: "{{ config.notification_webhook }}"
+      payload:
+        status: "success"
+        cases_count: "{{ steps.output-test-cases.summary.total }}"
+        
+  on_error:
+    - type: log
+      level: error
+      message: "工作流执行出错: {{ error.message }}"
+    - type: webhook
+      url: "{{ config.notification_webhook }}"
+      payload:
+        status: "error"
+        error: "{{ error.message }}"
+        failed_step: "{{ error.step }}"
+
+# 输出定义
+outputs:
+  - name: test_cases_file
+    value: "{{ steps.output-test-cases.output_file }}"
+    description: "生成的测试用例文件路径"
+    
+  - name: test_cases_summary
+    value: "{{ steps.output-test-cases.summary }}"
+    description: "测试用例统计摘要"
+    
+  - name: review_comments
+    value: "{{ steps.human-review.review_comments }}"
+    description: "评审意见"
+    
+  - name: report_file
+    value: "{{ steps.generate-report.report_file }}"
+    description: "测试用例报告文件"
+
+# 元数据
+metadata:
+  author: "AI Test Platform"
+  created: "2026-04-13"
+  tags:
+    - 测试用例
+    - 自动化
+    - AI辅助
+  version_history:
+    - version: "1.0.0"
+      date: "2026-04-13"
+      changes: "初始版本"
