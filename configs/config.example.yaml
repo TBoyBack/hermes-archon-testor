@@ -1,0 +1,28 @@
+# Hermes-Archon 测试平台配置示例
+
+# Hermes Agent 配置
+hermes:
+  model: "claude-3-opus"
+  memory_db: "./data/hermes_memory.db"
+  skills_dir: "./skills"
+
+# Archon 配置
+archon:
+  workflows_dir: "./.archon/workflows"
+  max_parallel: 5
+  timeout: 3600
+
+# 业务线配置
+business_lines:
+  - name: "广告平台"
+    code: "ad-platform"
+    enabled: true
+  - name: "小游戏"
+    code: "mini-game"
+    enabled: false
+  - name: "PAD应用"
+    code: "pad-app"
+    enabled: false
+  - name: "混合APP"
+    code: "hybrid-app"
+    enabled: false
